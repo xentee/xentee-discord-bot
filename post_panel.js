@@ -20,7 +20,7 @@ client.once('ready', async () => {
 
   const embed = new EmbedBuilder()
     .setTitle('🎟️ Create my ticket')
-    .setDescription('Click to create a private channel and start.\nClique pour créer un salon privé et commencer.')
+    .setDescription('🇺🇸 Click to create a private channel and start.\n🇫🇷 Clique pour créer un salon privé et commencer.')
     .setTimestamp(new Date());
 
   const row = new ActionRowBuilder().addComponents(
