@@ -18,16 +18,32 @@ function prettifyName(raw) {
   s = s.replace(/\$\s?\d[\d,]*(?:\.\d+)?\s*-\s*\$\s?\d[\d,]*(?:\.\d+)?/g, '');
   s = s.replace(/(?:-?\s*)?\b(?:\d+\s*)?listed\b/gi, '');
 
-  // normaliser espaces et ajouter " | " quand collé (heuristique simple)
+  // retirer "Souvenir" en toutes formes :
+  // - mot isolé (avec ou sans parenthèses), + séparateurs qui suivent
+  s = s.replace(/\(?\bSouvenir\b\)?[\s|:–-]*/gi, '');
+  // - cas collé : "SouvenirMP9", "SouvenirAWP", etc.
+  s = s.replace(/Souvenir(?=[A-Z0-9])/gi, '');
+
+  // normaliser espaces
   s = s.replace(/\s{2,}/g, ' ').trim();
+
+  // ajouter " | " quand nom d'arme collé à la skin (inclut AUG maintenant)
   s = s.replace(
-    /(Knife|AK-47|M4A1-S|M4A4|AWP|Desert Eagle|USP-S|Glock-18|P250|FAMAS|Galil AR|MAC-10|MP9|MP7|MP5-SD|UMP-45|P90|PP-Bizon|CZ75-Auto|Five-SeveN|Tec-9|Nova|XM1014|MAG-7|Sawed-Off|SSG 08|SCAR-20|G3SG1|Negev|M249)(?=[A-Z])/g,
-    '$1 | '
-  );
+  /(Kukri Knife|Skeleton Knife|Nomad Knife|Survival Knife|Paracord Knife|Classic Knife|M9 Bayonet|Huntsman Knife|Falchion Knife|Butterfly Knife|Shadow Daggers|Navaja Knife|Stiletto Knife|Talon Knife|Ursus Knife|Flip Knife|Gut Knife|Karambit|Bowie Knife|Bayonet|AK-47|M4A1-S|M4A4|AUG|SG 553|Galil AR|FAMAS|AWP|SSG 08|SCAR-20|G3SG1|Nova|XM1014|MAG-7|Sawed-Off|M249|Negev|MAC-10|MP9|MP7|MP5-SD|UMP-45|P90|PP-Bizon|USP-S|Glock-18|P2000|Dual Berettas|P250|CZ75-Auto|Five-SeveN|Tec-9|Desert Eagle|R8 Revolver|Driver Gloves|Hand Wraps|Moto Gloves|Specialist Gloves|Sport Gloves|Bloodhound Gloves|Hydra Gloves|Broken Fang Gloves)(?=[A-Z])/g,
+  '$1 | '
+);
+
+
   return s;
 }
+
 function wearDisplay(w) {
   return w?.startsWith('ST_') ? w.slice(3) : w;
+}
+
+function formatDisplayName(item) {
+  // Ajoute "StatTrak™ " si nécessaire
+  return `${item?.is_st ? 'StatTrak™ ' : ''}${item?.display_name || ''}`;
 }
 
 /* ---------- ENV ---------- */
@@ -42,9 +58,9 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.GuildMember, Partials.User]
 });
 
-const ticketState = new Map(); // channelId -> { lang:'EN'|'FR', paymethod:string|null, items:[], _pending?:{} }
+const ticketState = new Map(); // channelId -> { lang:'EN'|'FR', paymethod:string|null, items:[], extra:string|null, _pending?:{} }
 function getState(chId) {
-  if (!ticketState.has(chId)) ticketState.set(chId, { lang: 'EN', paymethod: null, items: [] });
+  if (!ticketState.has(chId)) ticketState.set(chId, { lang: 'EN', paymethod: null, items: [], extra: null });
   return ticketState.get(chId);
 }
 
@@ -78,7 +94,7 @@ async function createPrivateTicketChannel(guild, opener) {
     topic: `Ticket de ${opener.tag} — cashtrade`
   });
 
-  ticketState.set(ch.id, { lang: 'EN', paymethod: null, items: [] });
+  ticketState.set(ch.id, { lang: 'EN', paymethod: null, items: [], extra: null });
   return ch;
 }
 
@@ -166,7 +182,7 @@ client.on('interactionCreate', async (i) => {
             new ButtonBuilder()
               .setCustomId('add_item_open')
               .setLabel(st.lang === 'FR' ? 'Ajouter un item' : 'Add item')
-              .setStyle(ButtonStyle.Secondary)
+              .setStyle(ButtonStyle.Success)
           )
         ]
       });
@@ -255,7 +271,16 @@ client.on('interactionCreate', async (i) => {
         content: msg,
         components: [
           new ActionRowBuilder().addComponents(select),
-          new ActionRowBuilder().addComponents(askNumberBtn)
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('pick_number_open')
+              .setLabel(st.lang === 'FR' ? 'Entrer un numéro' : 'Enter a number')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId('refine_search')
+              .setLabel(st.lang === 'FR' ? 'Nouvelle recherche' : 'Refine search')
+              .setStyle(ButtonStyle.Secondary)
+          )
         ]
       });
     }
@@ -277,6 +302,27 @@ client.on('interactionCreate', async (i) => {
       modal.addComponents(new ActionRowBuilder().addComponents(num));
       return i.showModal(modal);
     }
+
+    // Bouton "Refine search" → réouvrir la saisie libre et reset du pending
+    if (i.isButton() && i.customId === 'refine_search') {
+      const st = getState(i.channel.id);
+      st._pending = undefined; // on repart de zéro pour la sélection
+
+      const modal = new ModalBuilder()
+        .setCustomId('add_item_free')
+        .setTitle(st.lang === 'FR' ? 'Recherche (texte libre)' : 'Search (free text)');
+
+      const q = new TextInputBuilder()
+        .setCustomId('q_text')
+        .setLabel(st.lang === 'FR' ? 'Ex: "kara tiger tooth"' : 'e.g., "kara tiger tooth"')
+        .setStyle(TextInputStyle.Short)
+        .setMaxLength(80)
+        .setRequired(true);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(q));
+      return i.showModal(modal);
+    }
+
 
     /* Sélection via le menu → demander StatTrak ? */
     if (i.isStringSelectMenu() && i.customId === 'pick_by_select') {
@@ -306,8 +352,8 @@ client.on('interactionCreate', async (i) => {
     /* ---- StatTrak ? ---- */
     async function askStatTrak(inter, st) {
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('st_yes').setLabel('StatTrak: Yes').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('st_no').setLabel('StatTrak: No').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('st_yes').setLabel('StatTrak: Yes').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('st_no').setLabel('StatTrak: No').setStyle(ButtonStyle.Danger)
       );
 
       const txt = st.lang === 'FR' ? 'StatTrak ?' : 'StatTrak?';
@@ -341,7 +387,7 @@ client.on('interactionCreate', async (i) => {
       });
     }
 
-    /* Wear simple → quantité */
+    /* Wear simple → on enregistre directement l’item (plus de quantité) */
     if (i.isStringSelectMenu() && i.customId === 'pick_wear_simple') {
       const st = getState(i.channel.id);
       if (!st._pending?.hash) {
@@ -349,68 +395,78 @@ client.on('interactionCreate', async (i) => {
       }
 
       const wear = i.values[0]; // FN/MW/FT/WW/BS
-      st._pending.wear = st._pending.st ? `ST_${wear}` : wear;
+      const isSt = !!st._pending.st;
+      const rawName = st._pending.hash;
 
-      const modal = new ModalBuilder()
-        .setCustomId('qty_modal')
-        .setTitle(st.lang === 'FR' ? 'Quantité' : 'Quantity');
-
-      const qty = new TextInputBuilder()
-        .setCustomId('qty_text')
-        .setLabel(st.lang === 'FR' ? 'Combien ?' : 'How many?')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      modal.addComponents(new ActionRowBuilder().addComponents(qty));
-      return i.showModal(modal);
-    }
-
-    /* Save item + message "Added" minimal + options Add/Done */
-    if (i.isModalSubmit() && i.customId === 'qty_modal') {
-      const st = getState(i.channel.id);
-      const qty = Math.max(1, parseInt(i.fields.getTextInputValue('qty_text') || '1', 10));
-
-      const rawName = st._pending?.hash;
       const item = {
-        hash_name: rawName,                   // brut pour la suite
-        display_name: prettifyName(rawName),  // propre pour l'affichage
-        wear: st._pending?.wear,
-        qty
+        hash_name: rawName,
+        display_name: prettifyName(rawName),
+        is_st: isSt,
+        wear: isSt ? `ST_${wear}` : wear
       };
+
+      // reset pending et push
       delete st._pending;
       st.items.push(item);
 
       return i.reply({
         content: st.lang === 'FR'
-          ? `Ajouté : **${item.display_name}**`
-          : `Added: **${item.display_name}**`,
+          ? `Ajouté : **${formatDisplayName(item)}**`
+          : `Added: **${formatDisplayName(item)}**`,
         components: [
           new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('add_item_open').setLabel(st.lang === 'FR' ? 'Ajouter' : 'Add').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('add_item_open').setLabel(st.lang === 'FR' ? 'Ajouter un autre item' : 'Add another item').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId('add_done').setLabel(st.lang === 'FR' ? 'Terminer' : 'Done').setStyle(ButtonStyle.Success)
           )
         ]
       });
     }
 
-    /* Preview + bouton Compute estimate (placeholder) */
+    /* Done → demander "Informations supplémentaires" (optionnel) */
     if (i.isButton() && i.customId === 'add_done') {
       const st = getState(i.channel.id);
       if (!st.items.length) {
         return i.reply({ content: st.lang === 'FR' ? 'Aucun item. Ajoute-en au moins un.' : 'No items yet. Please add one.', ephemeral: true });
       }
 
+      const modal = new ModalBuilder()
+        .setCustomId('extra_modal')
+        .setTitle(st.lang === 'FR' ? 'Informations supplémentaires' : 'Additional information');
+
+      const extra = new TextInputBuilder()
+        .setCustomId('extra_text')
+        .setLabel(st.lang === 'FR' ? 'Détails utiles (optionnel)' : 'Useful details (optional)')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(500);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(extra));
+      return i.showModal(modal);
+    }
+
+    /* Soumission des informations supplémentaires → Preview */
+    if (i.isModalSubmit() && i.customId === 'extra_modal') {
+      const st = getState(i.channel.id);
+      st.extra = (i.fields.getTextInputValue('extra_text') || '').trim() || null;
+
       const list = st.items
-        .map(x => `• ${x.display_name} (${wearDisplay(x.wear)}) x${x.qty}`)
+        .map(x => `• ${formatDisplayName(x)} (${wearDisplay(x.wear)})`)
         .join('\n');
 
+      const embed = new EmbedBuilder()
+        .setTitle(st.lang === 'FR' ? 'Prévisualisation' : 'Preview')
+        .setDescription(list)
+        .setTimestamp(new Date());
+
+      if (st.extra) {
+        embed.addFields({
+          name: st.lang === 'FR' ? 'Informations supplémentaires' : 'Additional info',
+          value: st.extra
+        });
+      }
+
       return i.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(st.lang === 'FR' ? 'Prévisualisation' : 'Preview')
-            .setDescription(list)
-            .setTimestamp(new Date())
-        ],
+        embeds: [embed],
         components: [
           new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('go_fetch').setLabel(st.lang === 'FR' ? 'Calculer estimation' : 'Compute estimate').setStyle(ButtonStyle.Primary)
