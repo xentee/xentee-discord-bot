@@ -2,7 +2,7 @@
 import got from 'got';
 import * as cheerio from 'cheerio';
 
-// ——— Catalogues pour nettoyage/structure ———
+// --- catalogue armes/gants ---
 const WEAPONS = [
   'Kukri Knife','Skeleton Knife','Nomad Knife','Survival Knife','Paracord Knife','Classic Knife',
   'M9 Bayonet','Huntsman Knife','Falchion Knife','Butterfly Knife','Shadow Daggers','Navaja Knife',
@@ -14,6 +14,9 @@ const WEAPONS = [
   'Driver Gloves','Hand Wraps','Moto Gloves','Specialist Gloves','Sport Gloves','Bloodhound Gloves','Hydra Gloves','Broken Fang Gloves'
 ];
 
+// slugs pour détecter l’arme dans /cs2-items/skin/<slug>
+const WEAPON_SLUGS = WEAPONS.map(name => ({ name, slug: slugify(name) }));
+
 const UA_HEADERS = {
   'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Safari/537.36',
   'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -22,97 +25,70 @@ const UA_HEADERS = {
   'pragma': 'no-cache',
   'referer': 'https://pricempire.com/'
 };
+const GOT_OPTS = { headers: UA_HEADERS, http2: false, throwHttpErrors: false, timeout: { request: 15000 }, retry: { limit: 1 } };
 
-const GOT_OPTS = {
-  headers: UA_HEADERS,
-  http2: false,                // évite certains TLS/CF h2 quirks
-  throwHttpErrors: false,      // on gère nous-mêmes 403/503
-  timeout: { request: 15000 }, // 15s
-  retry: { limit: 1 }          // petit retry
-};
+/* ---------------- Helpers ---------------- */
+function slugify(s) {
+  return String(s)
+    .toLowerCase()
+    .replace(/™/g, '')
+    .replace(/[|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\s/g, '-')
+    .replace(/[^a-z0-9-]/g, '');
+}
+function titleFromSlug(slug) {
+  // "neo-noir" -> "Neo Noir" (titre simplifié)
+  return slug.split('-').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+}
 
-// ——— Helpers d’hygiène ———
 function stripNoise(s) {
   if (!s) return s;
   let t = String(s);
-
-  // Retirer StatTrak™, Souvenir (toutes formes, y compris collé)
   t = t.replace(/StatTrak™\s*/gi, '');
   t = t.replace(/\(?\bSouvenir\b\)?[\s|:–-]*/gi, '');
   t = t.replace(/Souvenir(?=[A-Z0-9])/gi, '');
-
-  // Retirer plages de prix et prix unitaires
   t = t.replace(/\$\s?\d[\d,]*(?:\.\d+)?\s*-\s*\$\s?\d[\d,]*(?:\.\d+)?/g, '');
   t = t.replace(/\$\s?\d[\d,]*(?:\.\d+)?/g, '');
-
-  // Retirer offers / listed
   t = t.replace(/\b\d{1,3}(?:,\d{3})*\s*offers?\b/gi, '');
   t = t.replace(/\b(?:\d+\s*)?listed\b/gi, '');
-
-  // Normaliser espaces
   t = t.replace(/\s{2,}/g, ' ').trim();
   return t;
 }
-
 function insertPipeBetweenWeaponAndFinish(s) {
   if (!s) return s;
-  const rx = new RegExp(
-    '(' + WEAPONS.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?=[A-Z0-9(])'
-  );
+  const rx = new RegExp('(' + WEAPONS.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?=[A-Z0-9(])');
   return s.replace(rx, '$1 | ');
 }
-
-function looksLikeSkinName(s) {
+function looksLikeSkinNameOrAgent(s) {
   if (!s) return false;
-  // rejeter les lignes qui ressemblent à un état/prix/offres
   if (/\b(Factory New|Minimal Wear|Field-?Tested|Well-?Worn|Battle-?Scarred)\b/i.test(s)) return false;
   if (/\boffers?\b/i.test(s)) return false;
   if (/\$\s?\d/.test(s)) return false;
 
-  // doit contenir au moins un type d’arme/gants
+  // valide si "arme/gants" connus OU si ça ressemble à un agent (souvent "Name | Faction")
   const hasWeapon = new RegExp('\\b(' + WEAPONS.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\b').test(s);
-  return hasWeapon;
+  const looksAgent = /\s\|\s/.test(s) && !hasWeapon; // heuristique simple: "Nom | Faction", sans arme
+  return hasWeapon || looksAgent;
 }
-
 function toLabelClean(raw) {
-  return insertPipeBetweenWeaponAndFinish(stripNoise(raw));
+  // 1) nettoyage
+  let s = stripNoise(raw);
+  // 2) séparer arme | finish si collés (pour skins/gants)
+  s = insertPipeBetweenWeaponAndFinish(s);
+  // 3) Neo-Noir -> Neo Noir (uniquement dans la *finish*)
+  const parts = s.split(' | ');
+  if (parts.length >= 2) {
+    const weaponOrName = parts[0];
+    const right = parts.slice(1).join(' | ');
+    const rightFixed = right.replace(/-/g, ' ');
+    s = `${weaponOrName} | ${rightFixed}`;
+  }
+  return s;
 }
 
-// ——— Extraction HTML ———
-function extractFromHtml(html, acc) {
-  const $ = cheerio.load(html);
-
-  $('a[href]').each((_, el) => {
-    const href = ($(el).attr('href') || '').trim();
-    if (!href) return;
-
-    // 1) Vrai item link: /item/730/<hash> | /item/<hash>
-    let m =
-      href.match(/^\/item\/730\/([^?#]+)/) ||
-      href.match(/^\/item\/([^?#]+)/);
-
-    if (m) {
-      const hash = decodeURIComponent(m[1]);
-      const txt = ($(el).text() || '').replace(/\s+/g, ' ').trim();
-      if (!txt) return;
-      acc.push({ name: txt, market_hash_name: hash });
-      return;
-    }
-
-    // 2) Fallback: /cs2-items/...  (pas de hash propre, on utilisera le texte)
-    if (/^\/cs2-items\//.test(href)) {
-      const txt = ($(el).text() || '').replace(/\s+/g, ' ').trim();
-      if (!txt) return;
-      // on met le label nettoyé comme "hash" de secours (on le gardera seulement pour l’affichage)
-      const label = toLabelClean(txt);
-      if (!looksLikeSkinName(label)) return;
-      acc.push({ name: label, market_hash_name: label });
-      return;
-    }
-  });
-}
-
-// ——— Téléchargement (log des statuts) ———
+/* -------------- Réseau -------------- */
 async function fetchHtml(url) {
   const res = await got(url, GOT_OPTS);
   if (res.statusCode >= 400) {
@@ -122,11 +98,87 @@ async function fetchHtml(url) {
   return res.body || '';
 }
 
-// ——— API principale ———
+/* -------------- Extraction -------------- */
+function extractFromHtml(html, acc) {
+  const $ = cheerio.load(html);
+
+  $('a[href]').each((_, el) => {
+    const href = ($(el).attr('href') || '').trim();
+    if (!href) return;
+
+    // (A) Vrais liens d'item -> on utilise le HASH comme libellé (complet)
+    const mItem = href.match(/^\/item\/730\/([^?#]+)/) || href.match(/^\/item\/([^?#]+)/);
+    if (mItem) {
+      const hash = decodeURIComponent(mItem[1]);   // ex: "USP-S | Neo-Noir"
+      acc.push({ name: hash, market_hash_name: hash, type: inferTypeFromHash(hash) });
+      return;
+    }
+
+    // (B) /cs2-items/skin/<slug> ...
+    const mSkin = href.match(/^\/cs2-items\/skin\/([^/?#]+)/i);
+    if (mSkin) {
+      const slug = mSkin[1].toLowerCase(); // "usp-s-neo-noir"
+      const found = WEAPON_SLUGS.find(w => slug === w.slug || slug.startsWith(w.slug + '-'));
+      if (!found) return;
+      const finishSlug = slug.slice(found.slug.length).replace(/^-/, '');
+      const finishName = finishSlug ? titleFromSlug(finishSlug) : '';
+      const label = finishName ? `${found.name} | ${finishName}` : found.name;
+      acc.push({ name: label, market_hash_name: label, type: 'skin' });
+      return;
+    }
+
+    // (C) /cs2-items/glove(s)/<slug> ...  (accepte singulier/pluriel)
+    const mGloves = href.match(/^\/cs2-items\/glove(s)?\/([^/?#]+)/i);
+    if (mGloves) {
+      const slug = mGloves[2].toLowerCase();
+      const found = WEAPON_SLUGS.find(w => slug === w.slug || slug.startsWith(w.slug + '-'));
+      let label;
+      if (found) {
+        const variantSlug = slug.slice(found.slug.length).replace(/^-/, '');
+        const variant = variantSlug ? titleFromSlug(variantSlug) : '';
+        label = variant ? `${found.name} | ${variant}` : found.name;
+      } else {
+        // fallback: simple Title Case
+        label = titleFromSlug(slug);
+      }
+      acc.push({ name: label, market_hash_name: label, type: 'gloves' });
+      return;
+    }
+
+
+    // (D) /cs2-items/agent/<slug> ...  (NOUVEAU)
+    const mAgent = href.match(/^\/cs2-items\/agent\/([^/?#]+)/i);
+    if (mAgent) {
+      const slug = mAgent[1].toLowerCase(); // ex: "sir-bloody-darryl-royale-the-professionals"
+      // On formate en Title Case, puis si on trouve " | " absent, on essaye d'insérer avant "The ..."
+      let title = titleFromSlug(slug); // "Sir Bloody Darryl Royale The Professionals"
+      if (!/\s\|\s/.test(title)) {
+        // simple heuristique: insérer " | " avant "The " / "Le " / "La " / "Les "
+        title = title.replace(/\s(The|Le|La|Les)\s/i, ' | $1 ');
+      }
+      acc.push({ name: title, market_hash_name: title, type: 'agent' });
+      return;
+    }
+  });
+}
+
+function inferTypeFromHash(hash) {
+  // simple heuristique via arme/gants connues
+  const hasWeapon = new RegExp('\\b(' + WEAPONS.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\b').test(hash);
+  if (hasWeapon) {
+    if (/\b(Gloves|Wraps)\b/i.test(hash)) return 'gloves';
+    return 'skin';
+  }
+  // sinon, probable agent (hash comme "Lt. Commander Ricksaw | NSWC SEAL")
+  if (/\s\|\s/.test(hash)) return 'agent';
+  return 'skin';
+}
+
+/* -------------- API publique -------------- */
 export async function getCandidatesFromLooseInput(q) {
   const out = [];
 
-  // 1) ancienne page item (souvent redirige bien)
+  // 1) tentative /item/{q}
   try {
     const url1 = `https://pricempire.com/item/${encodeURIComponent(q)}`;
     const html1 = await fetchHtml(url1);
@@ -146,14 +198,11 @@ export async function getCandidatesFromLooseInput(q) {
     }
   }
 
-  // Nettoyage + dédup
+  // 3) nettoyage + dédup + limite
   const seen = new Set();
   const clean = out
-    .map(x => {
-      const label = toLabelClean(x.name);
-      return { ...x, label };
-    })
-    .filter(x => x.label && looksLikeSkinName(x.label))
+    .map(x => ({ ...x, label: toLabelClean(x.name) }))
+    .filter(x => x.label && looksLikeSkinNameOrAgent(x.label))
     .filter(x => {
       const key = x.market_hash_name;
       if (seen.has(key)) return false;
@@ -162,9 +211,10 @@ export async function getCandidatesFromLooseInput(q) {
     })
     .slice(0, 10);
 
-  // format attendu par index.js
+  // format pour index.js, avec le type
   return clean.map(x => ({
     name: x.label,
-    market_hash_name: x.market_hash_name
+    market_hash_name: x.market_hash_name,
+    type: x.type || 'skin'
   }));
 }
