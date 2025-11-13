@@ -1,4 +1,10 @@
 // src/services/pricempire.js
+/*
+ * Copyright (c) 2025 XenTee. All rights reserved.
+ * Unauthorized copying, modification, or distribution of this file,
+ * via any medium, is strictly prohibited without written permission.
+ */
+
 import got from 'got';
 import * as cheerio from 'cheerio';
 

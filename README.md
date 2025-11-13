@@ -1,3 +1,8 @@
+> ⚠️ **Proprietary Code — No Redistribution**
+>
+> The contents of this repository are protected by copyright and are proprietary to **XenTee**.
+> Viewing is allowed, but **any reuse, modification, or distribution** without **written permission** is **prohibited**.
+
 # XenTee Cashtrade Assistant
 
 A private and fully automated Discord system designed to streamline **cash trading** for CS2 items between users and XenTee.  
@@ -152,3 +157,5 @@ Built **specifically for XenTee** to:
 - Staff **ticket-closing** commands  
 - Persist **ticket logs** in a database  
 - Margin/offer **calculation logic**
+
+© 2025 XenTee — All rights reserved.
