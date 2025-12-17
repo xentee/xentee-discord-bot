@@ -60,7 +60,6 @@ function enforceWeaponPrefixCasing(name) {
   if (pipeIdx <= 0) return name;
   const rawPrefix = name.slice(0, pipeIdx).trim();
 
-  // Tolérer variantes: "AK 47", "SSG08", "UMP45", etc.
   const norm = canonKey(
     rawPrefix
       .replace(/\bAK[\s-]?47\b/i, 'AK-47')
@@ -90,41 +89,36 @@ function enforceWeaponPrefixCasing(name) {
 function prettifyName(raw) {
   if (!raw) return raw;
   let s = String(raw);
-  
+
+  // cas particuliers AK-47 au début
   s = s.replace(/^\s*ak[\s-]?47\b/i, 'AK-47 ');
-  // retirer StatTrak™, tranches de prix, "listed"
-  s = s.replace(/StatTrak™\s*/gi, '');
-  s = s.replace(/\$\s?\d[\d,]*(?:\.\d+)?\s*-\s*\$\s?\d[\d,]*(?:\.\d+)?/g, '');
-  s = s.replace(/(?:-?\s*)?\b(?:\d+\s*)?listed\b/gi, '');
+  // retirer bruit Pricempire
+  s = s.replace(/StatTrak™\s*/gi, '');                                                // ST™
+  s = s.replace(/\$\s?\d[\d,]*(?:\.\d+)?\s*-\s*\$\s?\d[\d,]*(?:\.\d+)?/g, '');        // ranges
+  s = s.replace(/(?:-?\s*)?\b(?:\d+\s*)?listed\b/gi, '');                              // "listed"
+  s = s.replace(/\(?\bSouvenir\b\)?[\s|:–-]*/gi, '');                                  // Souvenir mot isolé
+  s = s.replace(/Souvenir(?=[A-Z0-9])/gi, '');                                         // Souvenir collé
 
-  // retirer "Souvenir"
-  s = s.replace(/\(?\bSouvenir\b\)?[\s|:–-]*/gi, '');
-  s = s.replace(/Souvenir(?=[A-Z0-9])/gi, '');
-
-  // cas particuliers Pricempire pour les caisses
-  //  - préfixe "Container" collé à "Operation ..."
+  // caisses Pricempire cassées
   s = s.replace(/^Container(?=[A-Z])/i, '');
-  //  - prix seul qui traîne: "$7." ou "$1.23"
   s = s.replace(/\$\s?\d[\d,]*(?:\.\d+)?\.?/g, '');
-  //  - "Weapon Case$7." -> "Weapon Case"
   s = s.replace(/Weapon Case\s*$/i, 'Weapon Case');
 
-  // normaliser espaces
+  // espaces
   s = s.replace(/\s{2,}/g, ' ').trim();
 
+  // pipe manquant quand collé
   s = s.replace(
     /(Kukri Knife|Skeleton Knife|Nomad Knife|Survival Knife|Paracord Knife|Classic Knife|M9 Bayonet|Huntsman Knife|Falchion Knife|Butterfly Knife|Shadow Daggers|Navaja Knife|Stiletto Knife|Talon Knife|Ursus Knife|Flip Knife|Gut Knife|Karambit|Bowie Knife|Bayonet|AK-47|M4A1-S|M4A4|AUG|SG 553|Galil AR|FAMAS|AWP|SSG 08|SCAR-20|G3SG1|Nova|XM1014|MAG-7|Sawed-Off|M249|Negev|MAC-10|MP9|MP7|MP5-SD|UMP-45|P90|PP-Bizon|USP-S|Glock-18|P2000|Dual Berettas|P250|CZ75-Auto|Five-SeveN|Tec-9|Desert Eagle|R8 Revolver|Driver Gloves|Hand Wraps|Moto Gloves|Specialist Gloves|Sport Gloves|Bloodhound Gloves|Hydra Gloves|Broken Fang Gloves)(?=[A-Z])/gi,
     '$1 | '
   );
-
   s = s.replace(
     /^(Kukri Knife|Skeleton Knife|Nomad Knife|Survival Knife|Paracord Knife|Classic Knife|M9 Bayonet|Huntsman Knife|Falchion Knife|Butterfly Knife|Shadow Daggers|Navaja Knife|Stiletto Knife|Talon Knife|Ursus Knife|Flip Knife|Gut Knife|Karambit|Bowie Knife|Bayonet|AK-47|M4A1-S|M4A4|AUG|SG 553|Galil AR|FAMAS|AWP|SSG 08|SCAR-20|G3SG1|Nova|XM1014|MAG-7|Sawed-Off|M249|Negev|MAC-10|MP9|MP7|MP5-SD|UMP-45|P90|PP-Bizon|USP-S|Glock-18|P2000|Dual Berettas|P250|CZ75-Auto|Five-SeveN|Tec-9|Desert Eagle|R8 Revolver|Driver Gloves|Hand Wraps|Moto Gloves|Specialist Gloves|Sport Gloves|Bloodhound Gloves|Hydra Gloves|Broken Fang Gloves)\s+(?!\|)(.+)$/i,
     '$1 | $2'
   );
 
-  // ➜ forcer la casse du préfixe arme (AWP, AK-47, M4A4, MP9, etc.)
+  // forcer la casse des préfixes armes
   s = enforceWeaponPrefixCasing(s);
-
   return s;
 }
 
@@ -182,49 +176,30 @@ function hasWeaponToken(str) {
 function rankAndFilterCandidates(query, candidates) {
   const nq = normalizeStr(query);
 
-  // 1) split par type
+  // split par type
   const normal = [];
   const cases = [];
   for (const c of candidates) {
-    // skip la tuile d’index “Case Index…”
-    if (c.type === 'case' && isCaseIndexTile(c.name)) continue;
+    if (c.type === 'case' && isCaseIndexTile(c.name)) continue; // skip tuile index
     (c.type === 'case' ? cases : normal).push(c);
   }
 
-  // 2) garder/écarter les cases
   let pool = [];
   if (queryWantsCases(query)) {
-    pool = [...cases, ...normal]; // l’utilisateur cherche des caisses: on laisse tout, cases d’abord après le tri
+    pool = [...cases, ...normal];
   } else {
-    pool = normal.length ? normal : candidates; // si on a des non-cases, on vire les cases; sinon on garde tout
+    pool = normal.length ? normal : candidates;
   }
 
-  // 3) scoring
   const qTokens = nq.split(/[\s|]+/).filter(Boolean);
   function score(c) {
     const name = normalizeStr(c.name || c.market_hash_name || '');
     let s = 0;
-
-    // exact phrase boost
-    if (name.includes(nq)) s += 50;
-
-    // tokens présents
-    for (const t of qTokens) {
-      if (t && name.includes(t)) s += 10;
-    }
-
-    // proximité “adjacente” des 2 premiers tokens
-    if (qTokens.length >= 2) {
-      const pair = qTokens[0] + ' ' + qTokens[1];
-      if (name.includes(pair)) s += 8;
-    }
-
-    // bonus si on détecte un token d’arme
+    if (name.includes(nq)) s += 50;                       // phrase entière
+    for (const t of qTokens) if (t && name.includes(t)) s += 10;
+    if (qTokens.length >= 2 && name.includes(qTokens[0] + ' ' + qTokens[1])) s += 8;
     if (hasWeaponToken(name)) s += 6;
-
-    // petit malus pour les cases si la query ne les vise pas
     if (c.type === 'case' && !queryWantsCases(query)) s -= 20;
-
     return s;
   }
 
@@ -302,8 +277,8 @@ client.on('interactionCreate', async (i) => {
         ],
         components: [
           new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('lang_EN').setLabel('🇺🇸').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('lang_FR').setLabel('🇫🇷').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId('lang_EN').setLabel('🇺🇸 English').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('lang_FR').setLabel('🇫🇷 Français').setStyle(ButtonStyle.Secondary)
           )
         ]
       });
@@ -311,30 +286,28 @@ client.on('interactionCreate', async (i) => {
       return i.editReply({ content: `Ticket created: <#${ch.id}>` });
     }
 
-    /* LANGUAGE → PAYMENT_METHOD */
+    /* LANGUAGE → PAYMENT (now with buttons) */
     if (i.isButton() && (i.customId === 'lang_EN' || i.customId === 'lang_FR')) {
       const st = getState(i.channel.id);
       st.lang = i.customId === 'lang_FR' ? 'FR' : 'EN';
 
-      const modal = new ModalBuilder()
-        .setCustomId('pm_modal')
-        .setTitle(st.lang === 'FR' ? 'Méthode de paiement' : 'Payment method');
+      const title = st.lang === 'FR' ? 'Choisis ton mode de paiement :' : 'Choose your payment method:';
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('pm_bank').setLabel(st.lang === 'FR' ? 'Virement (UE)' : 'Bank Transfer (EU)').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('pm_paypal').setLabel('PayPal F&F').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('pm_usdc').setLabel('USDC (ERC-20)').setStyle(ButtonStyle.Secondary)
+      );
 
-      const tx = new TextInputBuilder()
-        .setCustomId('pm_text')
-        .setLabel(st.lang === 'FR'
-          ? 'Méthode de paiement (ex: Revolut)'
-          : 'Payment method (e.g. Revolut)')
-        .setStyle(TextInputStyle.Short).setRequired(true);
-
-      modal.addComponents(new ActionRowBuilder().addComponents(tx));
-      return i.showModal(modal);
+      return i.reply({ content: title, components: [row] });
     }
 
-    /* PAYMENT_METHOD → SELL_OR_BUY */
-    if (i.isModalSubmit() && i.customId === 'pm_modal') {
+    /* PAYMENT (button) → SELL_OR_BUY */
+    if (i.isButton() && ['pm_bank', 'pm_paypal', 'pm_usdc'].includes(i.customId)) {
       const st = getState(i.channel.id);
-      st.paymethod = i.fields.getTextInputValue('pm_text')?.trim();
+      st.paymethod =
+        i.customId === 'pm_bank'  ? (st.lang === 'FR' ? 'Virement (UE)' : 'Bank Transfer (EU)') :
+        i.customId === 'pm_paypal'? 'PayPal F&F' :
+        'USDC (ERC-20)';
 
       return i.reply({
         content: st.lang === 'FR'
@@ -397,7 +370,7 @@ client.on('interactionCreate', async (i) => {
       return i.showModal(modal);
     }
 
-    /* Après input: candidats via /item/{input} (fallback /search) avec timeout */
+    /* Après input: candidats via Pricempire (timeout) */
     if (i.isModalSubmit() && i.customId === 'add_item_free') {
       const st = getState(i.channel.id);
       await i.deferReply({ ephemeral: true });
@@ -436,11 +409,11 @@ client.on('interactionCreate', async (i) => {
         });
       }
 
-      // garder les candidats (on n'affiche qu'un label nettoyé)
+      // tri + filtrage
       const ranked = rankAndFilterCandidates(query, candidates);
       st._pending = { candidates: ranked };
 
-      // IMPORTANT: index stable et unique
+      // options dropdown (uniques par idx)
       const pretty = ranked.map((c, idx) => ({
         ...c,
         idx,
@@ -512,12 +485,12 @@ client.on('interactionCreate', async (i) => {
       }
 
       if (st._pending.type === 'case') {
-        // Cases: demander quantité, puis ajout
+        // Cases: demander quantité
         return askCaseQuantity(i, st);
       }
 
       if (st._pending.type === 'gloves') {
-        // Gants: pas de StatTrak → aller direct sur wear
+        // Gants: pas de StatTrak → direct wear
         return askWear(i, st);
       }
 
@@ -694,13 +667,8 @@ client.on('interactionCreate', async (i) => {
 
       const list = st.items.map(x => {
         const baseName = formatDisplayName(x);
-        if (x.type === 'agent') {
-          return `• ${baseName}`;
-        }
-        if (x.type === 'case') {
-          const qty = x.qty ? ` x${x.qty}` : '';
-          return `• ${baseName}${qty}`;
-        }
+        if (x.type === 'agent') return `• ${baseName}`;
+        if (x.type === 'case')  return `• ${baseName}${x.qty ? ` x${x.qty}` : ''}`;
         const wd = wearDisplay(x.wear);
         return wd ? `• ${baseName} (${wd})` : `• ${baseName}`;
       }).join('\n');
