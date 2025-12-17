@@ -375,9 +375,9 @@ client.on('interactionCreate', async (i) => {
 
       const title = st.lang === 'FR' ? 'Choisis ton mode de paiement :' : 'Choose your payment method:';
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('pm_bank').setLabel(st.lang === 'FR' ? 'Virement (UE)' : 'Bank Transfer (EU)').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('pm_paypal').setLabel('PayPal F&F').setStyle(ButtonStyle.Link),
-        new ButtonBuilder().setCustomId('pm_usdc').setLabel('USDC (ERC-20)').setStyle(ButtonStyle.Premium)
+        new ButtonBuilder().setCustomId('pm_bank').setLabel(st.lang === 'FR' ? '🏦 Virement (UE)' : '🏦 Bank Transfer (EU)').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('pm_paypal').setLabel('💰 PayPal F&F').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('pm_usdc').setLabel('📈 Crypto (USDC ERC-20)').setStyle(ButtonStyle.Danger)
       );
 
       return i.reply({ content: title, components: [row] });
