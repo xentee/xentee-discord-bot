@@ -135,6 +135,81 @@ function formatDisplayName(item) {
   return `${item?.is_st ? 'StatTrak™ ' : ''}${item?.display_name || ''}`;
 }
 
+function bannerEmbed(st, opener) {
+  const L = (st.lang === 'FR');
+  const lines = [];
+  lines.push(L ? `**Langue :** ${st.lang}` : `**Language:** ${st.lang}`);
+  lines.push(L ? `**Paiement :** ${st.paymethod ?? '—'}` : `**Payment:** ${st.paymethod ?? '—'}`);
+  lines.push(L ? `**Items ajoutés :** ${st.items.length}` : `**Items added:** ${st.items.length}`);
+
+  if (st.items.length) {
+    const last = st.items.slice(-5);
+    lines.push(last.map(x => {
+      if (x.type === 'case') return `• ${formatDisplayName(x)}${x.qty ? ` x${x.qty}` : ''}`;
+      const wd = wearDisplay(x.wear);
+      return wd ? `• ${formatDisplayName(x)} (${wd})` : `• ${formatDisplayName(x)}`;
+    }).join('\n'));
+  }
+
+  const emb = new EmbedBuilder()
+    .setTitle(L ? '📌 Récapitulatif du ticket' : '📌 Ticket recap')
+    .setDescription(lines.join('\n'))
+    .setColor(0x5865F2)
+    .setTimestamp(new Date());
+
+  if (opener) emb.setFooter({ text: opener.tag ?? opener.username, iconURL: opener.displayAvatarURL?.() });
+  return emb;
+}
+
+async function ensureOrUpdateBanner(channel, st, opener) {
+  const lang = st.lang === 'FR' ? 'FR' : 'EN';
+  const pm = st.paymethod ? st.paymethod : (lang === 'FR' ? '— (à choisir)' : '— (to choose)');
+  const itemsLines = st.items?.length
+    ? st.items.map(x => {
+        const base = (x.type === 'agent' || x.type === 'case' || x.type === 'gloves')
+          ? (x.display_name || '')
+          : `${x.is_st ? 'StatTrak™ ' : ''}${x.display_name || ''}`;
+        if (x.type === 'case') return `• ${base}${x.qty ? ` x${x.qty}` : ''}`;
+        if (x.type === 'agent') return `• ${base}`;
+        const wd = x.wear?.startsWith('ST_') ? x.wear.slice(3) : x.wear;
+        return wd ? `• ${base} (${wd})` : `• ${base}`;
+      }).join('\n')
+    : (lang === 'FR' ? '— Aucun item' : '— No items yet');
+
+  const extra = st.extra ? st.extra : (lang === 'FR' ? '— (optionnel)' : '— (optional)');
+
+  const title = lang === 'FR' ? '🧾 Récapitulatif du ticket' : '🧾 Ticket summary';
+  const lines = [
+    `**${title}**`,
+    '',
+    `**User :** ${opener ? `<@${opener.id}>` : '—'}`,
+    `**Lang :** ${lang}`,
+    `**Payment :** ${pm}`,
+    '',
+    (lang === 'FR' ? '**Items :**' : '**Items:**'),
+    itemsLines,
+    '',
+    (lang === 'FR' ? '**Infos supp. :**' : '**Additional info:**'),
+    extra
+  ].join('\n');
+
+  try {
+    if (st.bannerId) {
+      const msg = await channel.messages.fetch(st.bannerId).catch(() => null);
+      if (msg) {
+        await msg.edit({ content: lines });
+        return msg;
+      }
+    }
+    const banner = await channel.send({ content: lines });
+    try { await banner.pin(); } catch {}
+    st.bannerId = banner.id;
+    return banner;
+  } catch (e) {
+    console.warn('[banner] update error', e?.message || e);
+  }
+}
+
 /* ---------- Ranking & filtering for search results ---------- */
 const WEAPON_TOKENS = [
   'ak','ak-47','m4a1-s','m4a4','awp','ssg','scout','g3sg1','scar','aug','sg','galil','famas',
@@ -220,9 +295,11 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.GuildMember, Partials.User]
 });
 
-const ticketState = new Map(); // channelId -> { lang:'EN'|'FR', paymethod:null|string, items:[], extra:null|string, _pending?:{} }
+const ticketState = new Map();
 function getState(chId) {
-  if (!ticketState.has(chId)) ticketState.set(chId, { lang: 'EN', paymethod: null, items: [], extra: null });
+  if (!ticketState.has(chId)) {
+    ticketState.set(chId, { lang: 'EN', paymethod: null, items: [], extra: null, bannerId: null });
+  }
   return ticketState.get(chId);
 }
 
@@ -245,7 +322,7 @@ async function createPrivateTicketChannel(guild, opener) {
     { id: everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
     { id: opener.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
     { id: STAFF_ROLE_ID, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
-    { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels] }
+    { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.ManageMessages] }
   ];
 
   const ch = await guild.channels.create({
@@ -256,7 +333,9 @@ async function createPrivateTicketChannel(guild, opener) {
     topic: `Ticket de ${opener.tag} — cashtrade`
   });
 
-  ticketState.set(ch.id, { lang: 'EN', paymethod: null, items: [], extra: null });
+  ticketState.set(ch.id, { lang: 'EN', paymethod: null, items: [], extra: null, bannerId: null });
+  const st = getState(ch.id);
+  await ensureOrUpdateBanner(ch, st, opener);
   return ch;
 }
 
@@ -291,6 +370,9 @@ client.on('interactionCreate', async (i) => {
       const st = getState(i.channel.id);
       st.lang = i.customId === 'lang_FR' ? 'FR' : 'EN';
 
+      // MAJ bandeau après choix langue
+      await ensureOrUpdateBanner(i.channel, st, i.user);
+
       const title = st.lang === 'FR' ? 'Choisis ton mode de paiement :' : 'Choose your payment method:';
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('pm_bank').setLabel(st.lang === 'FR' ? 'Virement (UE)' : 'Bank Transfer (EU)').setStyle(ButtonStyle.Primary),
@@ -308,6 +390,9 @@ client.on('interactionCreate', async (i) => {
         i.customId === 'pm_bank'  ? (st.lang === 'FR' ? 'Virement (UE)' : 'Bank Transfer (EU)') :
         i.customId === 'pm_paypal'? 'PayPal F&F' :
         'USDC (ERC-20)';
+
+      // MAJ bandeau après choix paiement
+      await ensureOrUpdateBanner(i.channel, st, i.user);
 
       return i.reply({
         content: st.lang === 'FR'
@@ -471,6 +556,9 @@ client.on('interactionCreate', async (i) => {
         delete st._pending;
         st.items.push(item);
 
+        // MAJ bandeau après ajout
+        await ensureOrUpdateBanner(i.channel, st, i.user);
+
         return i.reply({
           content: st.lang === 'FR'
             ? `Ajouté : **${formatDisplayName(item)}**`
@@ -537,6 +625,9 @@ client.on('interactionCreate', async (i) => {
 
       delete st._pending;
       st.items.push(item);
+
+      // MAJ bandeau après ajout
+      await ensureOrUpdateBanner(i.channel, st, i.user);
 
       return i.reply({
         content: st.lang === 'FR'
@@ -625,6 +716,9 @@ client.on('interactionCreate', async (i) => {
             ? `Ajouté : **${formatDisplayName(item)}**`
             : `Added: **${formatDisplayName(item)}**`);
 
+      // MAJ bandeau après ajout
+      await ensureOrUpdateBanner(i.channel, st, i.user);
+
       return i.reply({
         content: addedLine,
         components: [
@@ -664,6 +758,9 @@ client.on('interactionCreate', async (i) => {
     if (i.isModalSubmit() && i.customId === 'extra_modal') {
       const st = getState(i.channel.id);
       st.extra = (i.fields.getTextInputValue('extra_text') || '').trim() || null;
+
+      // MAJ bandeau après extras
+      await ensureOrUpdateBanner(i.channel, st, i.user);
 
       const list = st.items.map(x => {
         const baseName = formatDisplayName(x);
