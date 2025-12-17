@@ -376,8 +376,8 @@ client.on('interactionCreate', async (i) => {
       const title = st.lang === 'FR' ? 'Choisis ton mode de paiement :' : 'Choose your payment method:';
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('pm_bank').setLabel(st.lang === 'FR' ? 'Virement (UE)' : 'Bank Transfer (EU)').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('pm_paypal').setLabel('PayPal F&F').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('pm_usdc').setLabel('USDC (ERC-20)').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('pm_paypal').setLabel('PayPal F&F').setStyle(ButtonStyle.Link),
+        new ButtonBuilder().setCustomId('pm_usdc').setLabel('USDC (ERC-20)').setStyle(ButtonStyle.Premium)
       );
 
       return i.reply({ content: title, components: [row] });
@@ -445,8 +445,11 @@ client.on('interactionCreate', async (i) => {
       const q = new TextInputBuilder()
         .setCustomId('q_text')
         .setLabel(st.lang === 'FR'
-          ? 'Mots-clés (ex: kara tiger tooth)'
-          : 'Keywords (e.g. kara tiger tooth)')
+          ? 'Arme + nom ou mots-clés'
+          : 'Weapon + skin or keywords')
+        .setPlaceholder(st.lang === 'FR'
+          ? 'Ex : “AK-47 Vulcan”, “kara tiger tooth”, “hand wraps”, “fracture case”'
+          : 'e.g., “AK-47 Vulcan”, “kara tiger tooth”, “hand wraps”, “fracture case”')
         .setStyle(TextInputStyle.Short)
         .setMaxLength(80)
         .setRequired(true);
