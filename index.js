@@ -366,7 +366,6 @@ client.on('interactionCreate', async (i) => {
       return i.editReply({ content: `Ticket created: <#${ch.id}>` });
     }
 
-    /* LANGUAGE → PAYMENT (buttons) */
     if (i.isButton() && (i.customId === 'lang_EN' || i.customId === 'lang_FR')) {
       const st = getState(i.channel.id);
       st.lang = i.customId === 'lang_FR' ? 'FR' : 'EN';
@@ -567,7 +566,7 @@ client.on('interactionCreate', async (i) => {
           content: st.lang === 'FR'
             ? `Ajouté : **${formatDisplayName(item)}**`
             : `Added: **${formatDisplayName(item)}**`,
-          components: buildPostAddRows(st) // ✅ MODIF 1)B
+          components: buildPostAddRows(st)
         });
       }
 
@@ -632,7 +631,7 @@ client.on('interactionCreate', async (i) => {
         content: st.lang === 'FR'
           ? `Ajouté : **${formatDisplayName(item)}** x${qty}`
           : `Added: **${formatDisplayName(item)}** x${qty}`,
-        components: buildPostAddRows(st) // ✅ MODIF 1)B
+        components: buildPostAddRows(st)
       });
     }
 

@@ -9,10 +9,22 @@
     "panel": "node post_panel.js"
   },
   "dependencies": {
+    "better-sqlite3": "^12.5.0",
     "cheerio": "^1.0.0",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5",
     "fuse.js": "^7.0.0",
     "got": "^14.4.1"
-  }
+  },
+  "description": "> ⚠️ **Proprietary Code — No Redistribution** > > The contents of this repository are protected by copyright and are proprietary to **XenTee**. > Viewing is allowed, but **any reuse, modification, or distribution** without **written permission** is **prohibited**.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xentee/xentee-discord-bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/xentee/xentee-discord-bot/issues"
+  },
+  "homepage": "https://github.com/xentee/xentee-discord-bot#readme"
 }
