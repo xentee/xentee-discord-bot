@@ -135,32 +135,6 @@ function formatDisplayName(item) {
   return `${item?.is_st ? 'StatTrak™ ' : ''}${item?.display_name || ''}`;
 }
 
-function bannerEmbed(st, opener) {
-  const L = (st.lang === 'FR');
-  const lines = [];
-  lines.push(L ? `**Langue :** ${st.lang}` : `**Language:** ${st.lang}`);
-  lines.push(L ? `**Paiement :** ${st.paymethod ?? '—'}` : `**Payment:** ${st.paymethod ?? '—'}`);
-  lines.push(L ? `**Items ajoutés :** ${st.items.length}` : `**Items added:** ${st.items.length}`);
-
-  if (st.items.length) {
-    const last = st.items.slice(-5);
-    lines.push(last.map(x => {
-      if (x.type === 'case') return `• ${formatDisplayName(x)}${x.qty ? ` x${x.qty}` : ''}`;
-      const wd = wearDisplay(x.wear);
-      return wd ? `• ${formatDisplayName(x)} (${wd})` : `• ${formatDisplayName(x)}`;
-    }).join('\n'));
-  }
-
-  const emb = new EmbedBuilder()
-    .setTitle(L ? '📌 Récapitulatif du ticket' : '📌 Ticket recap')
-    .setDescription(lines.join('\n'))
-    .setColor(0x5865F2)
-    .setTimestamp(new Date());
-
-  if (opener) emb.setFooter({ text: opener.tag ?? opener.username, iconURL: opener.displayAvatarURL?.() });
-  return emb;
-}
-
 async function ensureOrUpdateBanner(channel, st, opener) {
   const lang = st.lang === 'FR' ? 'FR' : 'EN';
   const pm = st.paymethod ? st.paymethod : (lang === 'FR' ? '— (à choisir)' : '— (to choose)');
@@ -208,6 +182,33 @@ async function ensureOrUpdateBanner(channel, st, opener) {
   } catch (e) {
     console.warn('[banner] update error', e?.message || e);
   }
+}
+
+/* ---------- Comfort buttons (post-add) ---------- */
+function buildPostAddRows(st) {
+  const L = st.lang === 'FR';
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('add_item_open')
+        .setLabel(L ? 'Ajouter un autre item' : 'Add another item')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('add_done')
+        .setLabel(L ? 'Terminer' : 'Done')
+        .setStyle(ButtonStyle.Success),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('items_undo')
+        .setLabel(L ? 'Annuler le dernier' : 'Undo last')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('items_clear')
+        .setLabel(L ? 'Tout effacer' : 'Clear all')
+        .setStyle(ButtonStyle.Danger),
+    )
+  ];
 }
 
 /* ---------- Ranking & filtering for search results ---------- */
@@ -365,7 +366,7 @@ client.on('interactionCreate', async (i) => {
       return i.editReply({ content: `Ticket created: <#${ch.id}>` });
     }
 
-    /* LANGUAGE → PAYMENT (now with buttons) */
+    /* LANGUAGE → PAYMENT (buttons) */
     if (i.isButton() && (i.customId === 'lang_EN' || i.customId === 'lang_FR')) {
       const st = getState(i.channel.id);
       st.lang = i.customId === 'lang_FR' ? 'FR' : 'EN';
@@ -566,12 +567,7 @@ client.on('interactionCreate', async (i) => {
           content: st.lang === 'FR'
             ? `Ajouté : **${formatDisplayName(item)}**`
             : `Added: **${formatDisplayName(item)}**`,
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId('add_item_open').setLabel(st.lang === 'FR' ? 'Ajouter un autre item' : 'Add another item').setStyle(ButtonStyle.Primary),
-              new ButtonBuilder().setCustomId('add_done').setLabel(st.lang === 'FR' ? 'Terminer' : 'Done').setStyle(ButtonStyle.Success)
-            )
-          ]
+          components: buildPostAddRows(st) // ✅ MODIF 1)B
         });
       }
 
@@ -636,12 +632,7 @@ client.on('interactionCreate', async (i) => {
         content: st.lang === 'FR'
           ? `Ajouté : **${formatDisplayName(item)}** x${qty}`
           : `Added: **${formatDisplayName(item)}** x${qty}`,
-        components: [
-          new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('add_item_open').setLabel(st.lang === 'FR' ? 'Ajouter un autre item' : 'Add another item').setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId('add_done').setLabel(st.lang === 'FR' ? 'Terminer' : 'Done').setStyle(ButtonStyle.Success)
-          )
-        ]
+        components: buildPostAddRows(st) // ✅ MODIF 1)B
       });
     }
 
@@ -724,12 +715,107 @@ client.on('interactionCreate', async (i) => {
 
       return i.reply({
         content: addedLine,
+        components: buildPostAddRows(st) // ✅ MODIF 1)B
+      });
+    }
+
+    /* --------- 1)C + 2) Undo / Clear --------- */
+    if (i.isButton() && i.customId === 'items_undo') {
+      const st = getState(i.channel.id);
+
+      if (!st.items.length) {
+        return i.reply({
+          content: st.lang === 'FR' ? 'Aucun item à annuler.' : 'No item to undo.',
+          ephemeral: true
+        });
+      }
+
+      const removed = st.items.pop();
+
+      await ensureOrUpdateBanner(i.channel, st, i.user);
+
+      const base = formatDisplayName(removed);
+      const extra =
+        removed.type === 'case' ? (removed.qty ? ` x${removed.qty}` : '') :
+        removed.type === 'agent' ? '' :
+        removed.wear ? ` (${wearDisplay(removed.wear)})` : '';
+
+      return i.reply({
+        content: st.lang === 'FR'
+          ? `✅ Dernier item annulé : **${base}**${extra}`
+          : `✅ Undone: **${base}**${extra}`,
+        ephemeral: true
+      });
+    }
+
+    if (i.isButton() && i.customId === 'items_clear') {
+      const st = getState(i.channel.id);
+      const L = st.lang === 'FR';
+
+      return i.reply({
+        content: L
+          ? '⚠️ Tu es sûr ? Ça va supprimer **tous** les items ajoutés.'
+          : '⚠️ Are you sure? This will remove **all** added items.',
         components: [
           new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('add_item_open').setLabel(st.lang === 'FR' ? 'Ajouter un autre item' : 'Add another item').setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId('add_done').setLabel(st.lang === 'FR' ? 'Terminer' : 'Done').setStyle(ButtonStyle.Success)
+            new ButtonBuilder()
+              .setCustomId('items_clear_confirm')
+              .setLabel(L ? 'Oui, tout effacer' : 'Yes, clear all')
+              .setStyle(ButtonStyle.Danger),
+            new ButtonBuilder()
+              .setCustomId('items_clear_cancel')
+              .setLabel(L ? 'Annuler' : 'Cancel')
+              .setStyle(ButtonStyle.Secondary),
           )
-        ]
+        ],
+        ephemeral: true
+      });
+    }
+
+    if (i.isButton() && i.customId === 'items_clear_cancel') {
+      const st = getState(i.channel.id);
+      const L = st.lang === 'FR';
+
+      return i.update({
+        content: L ? '✅ Annulé.' : '✅ Cancelled.',
+        components: []
+      });
+    }
+
+    if (i.isButton() && i.customId === 'items_clear_confirm') {
+      const st = getState(i.channel.id);
+      const L = st.lang === 'FR';
+
+      // 1) Clean UI: on remplace le message de confirmation et on enlève les boutons
+      await i.update({
+        content: L
+          ? '🧹 Tous les items ont été supprimés.'
+          : '🧹 All items were cleared.',
+        components: []
+      });
+
+      // 2) Clear state
+      st.items = [];
+      st.extra = null;
+      delete st._pending;
+
+      // 3) Update banner
+      await ensureOrUpdateBanner(i.channel, st, i.user);
+
+      // 4) Ephemeral follow-up avec "Search item"
+      return i.followUp({
+        content: L
+          ? 'Tu peux repartir de zéro :'
+          : 'You can start again:',
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('add_item_open')
+              .setLabel(L ? 'Rechercher un item' : 'Search item')
+              .setStyle(ButtonStyle.Primary)
+          )
+        ],
+        ephemeral: true
       });
     }
 
